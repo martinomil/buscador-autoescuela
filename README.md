@@ -41,7 +41,14 @@ app/                  Lógica de negocio (sin UI)
   scoring.py              Puntuacion deterministica 0-100, sin LLM (Fase 5)
   ranking_service.py       Orquesta: score + narrativa LLM + tabla de ranking (Fase 5)
   formatting.py            Helpers de formato (desconocido -> "—", duraciones, precios)
-streamlit_app/         (Fase 6) interfaz
+  value_parsing.py         Parseo flexible de valores (JSON o texto), compartido CLI/UI
+streamlit_app/           Interfaz (Fase 6)
+  Home.py                  Dashboard + acciones rapidas
+  pages/
+    1_Autoescuelas.py        Tabla filtrable/ordenable
+    2_Autoescuela_Detalle.py  Ficha completa + edicion manual + historial
+    3_Ranking.py              Ranking ordenable
+    4_Enviar_Emails.py        Preview / prueba / envio real (mismo flujo que el CLI)
 templates/              Plantillas de email editables (texto plano)
   email_inicial.txt      Plantilla del primer contacto (editable sin tocar código)
 tests/                   Tests + emails ficticios de ejemplo
@@ -370,6 +377,40 @@ se verificó que el mismo caso ya se extrae correctamente (campo omitido).
 Aun así, es un buen recordatorio de por qué conviene revisar los datos con
 `show` antes de tomar una decisión, especialmente con el proveedor gratuito.
 
+## Interfaz (Fase 6)
+
+```powershell
+streamlit run streamlit_app/Home.py
+```
+
+Se abre en el navegador en `http://localhost:8501`. Páginas disponibles
+(barra lateral izquierda):
+
+- **Home** — dashboard con contadores (total, contactadas, pendientes,
+  respuestas, pendientes de seguimiento), las 5 mejores opciones actuales, y
+  botones de acción rápida: buscar respuestas nuevas en Gmail, analizarlas
+  con IA, y recalcular el ranking — sin salir del navegador.
+- **Autoescuelas** — tabla completa con filtro por estado/localidad;
+  columnas ordenables haciendo clic en la cabecera. Los datos desconocidos
+  se muestran como `—`.
+- **Autoescuela Detalle** — selector de autoescuela con toda su ficha,
+  desglose de puntuación (con barra de progreso por componente), razonamiento
+  y pros/contras/riesgos, **edición manual de cualquier dato extraído** (se
+  marca como corrección manual y no se sobrescribe en análisis futuros), y el
+  historial completo de comunicaciones (siempre con el texto original visible
+  para comparar contra lo que entendió la IA).
+- **Ranking** — las autoescuelas evaluadas ordenadas según el criterio que
+  elijas, con tarjetas resumen; las que aún no tienen score aparecen aparte.
+- **Enviar Emails** — mismo flujo de seguridad que el CLI: vista previa sin
+  enviar nada → email de prueba a ti mismo → envío real solo tras marcar una
+  casilla de confirmación explícita.
+
+La interfaz reutiliza exactamente la misma lógica que el CLI (`app/*.py`,
+`app/llm/*.py`) — no hay reglas ni cálculos duplicados en `streamlit_app/`,
+solo presentación. Las páginas tienen tests automáticos (`tests/test_streamlit_pages.py`)
+que las ejecutan contra una base de datos temporal, tanto vacía como con
+datos, usando el framework de pruebas de Streamlit (`AppTest`).
+
 ## Estado del proyecto (fases)
 
 - [x] Fase 1 — Estructura, base de datos, modelo de Autoescuela, importación CSV
@@ -377,5 +418,5 @@ Aun así, es un buen recordatorio de por qué conviene revisar los datos con
 - [x] Fase 3 — Lectura y almacenamiento de respuestas
 - [x] Fase 4 — Extracción estructurada mediante LLM
 - [x] Fase 5 — Ranking y evaluación
-- [ ] Fase 6 — Interfaz (Streamlit)
+- [x] Fase 6 — Interfaz (Streamlit)
 - [ ] Fase 7 — Follow-ups y mejoras

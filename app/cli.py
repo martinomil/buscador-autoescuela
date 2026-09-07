@@ -30,7 +30,6 @@ Uso:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 
@@ -67,6 +66,7 @@ from app.repository import (
     list_unmatched_inbound,
     set_field_value_manual,
 )
+from app.value_parsing import parse_flexible_value
 
 logger = logging.getLogger(__name__)
 
@@ -328,26 +328,13 @@ def cmd_escalate_ambiguous(args: argparse.Namespace) -> None:
         print(f"Reanalizadas con modelo mas potente: {len(result['processed'])} | Errores: {len(result['errors'])}")
 
 
-def _parse_cli_value(raw_value: str):
-    """Permite pasar numeros/booleanos/objetos JSON, o texto plano si no es JSON valido.
-
-    Ejemplos: --value 32 -> 32 (int); --value true -> True; --value "alta demanda"
-    -> "alta demanda" (texto tal cual, sin necesidad de comillas anidadas);
-    --value '{"value": 2, "unit": "weeks"}' -> dict.
-    """
-    try:
-        return json.loads(raw_value)
-    except json.JSONDecodeError:
-        return raw_value
-
-
 def cmd_set_field(args: argparse.Namespace) -> None:
     with get_session() as session:
         autoescuela = get_autoescuela(session, args.autoescuela_id)
         if autoescuela is None:
             print(f"No existe ninguna autoescuela con id={args.autoescuela_id}")
             return
-        value = _parse_cli_value(args.value)
+        value = parse_flexible_value(args.value)
         field_value = set_field_value_manual(session, args.autoescuela_id, args.field, value, updated_by="cli")
         print(
             f"Campo {field_value.field_name!r} de {autoescuela.name} actualizado a {field_value.value!r} "
