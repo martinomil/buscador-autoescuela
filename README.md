@@ -34,7 +34,9 @@ app/                  Lógica de negocio (sin UI)
   email_templates.py    Carga/renderizado de plantillas de email
   email_sender.py        Orquesta plantilla + Gmail + registro en BD + anti-duplicados
   gmail_reader.py         Detecta, parsea y asocia respuestas nuevas (Fase 3)
-  llm/                  (Fase 4) extracción y scoring con LLM
+  llm/
+    extractor.py           Prompt + schema + llamada a Claude (extraccion pura)
+    pipeline.py             Orquesta: coge respuestas nuevas, extrae, guarda (Fase 4)
 streamlit_app/         (Fase 6) interfaz
 templates/              Plantillas de email editables (texto plano)
   email_inicial.txt      Plantilla del primer contacto (editable sin tocar código)
@@ -204,16 +206,67 @@ Cómo funciona `check-replies`:
   respuestas (salvo que ya esté en un estado más avanzado como
   `interested`, `rejected` o `selected`, que no se pisan solos).
 
-## Credenciales que necesitarás más adelante
+## Extracción con IA (Fase 4)
 
-- **ANTHROPIC_API_KEY (Fase 4)**: clave de la API de Anthropic (console.anthropic.com).
+Necesitas una clave de la API de Anthropic (no confundir con tu suscripción
+Claude Pro, que es un producto distinto): crea una cuenta en
+[console.anthropic.com](https://console.anthropic.com/), genera una API key
+y añádela en `.env` como `ANTHROPIC_API_KEY=sk-ant-...`. Con el volumen de
+este proyecto (decenas de emails) el coste esperado es de céntimos.
+
+```powershell
+# Analiza con IA todas las respuestas nuevas (no reanaliza las ya procesadas)
+python -m app.cli process-replies
+
+# Limitar cuantas analiza en esta ejecucion, o forzar un modelo concreto
+python -m app.cli process-replies --limit 5
+python -m app.cli process-replies --model claude-haiku-4-5-20251001
+
+# Reanalizar con el modelo mas potente (LLM_MODEL_SMART) las respuestas que
+# el modelo barato marco como ambiguas (follow_up_needed=true)
+python -m app.cli escalate-ambiguous
+
+# Corregir a mano un dato mal extraido (queda marcado como source=manual y
+# ya no se sobrescribe automaticamente en futuros analisis)
+python -m app.cli set-field --autoescuela-id 12 --field practice_price --value 30
+
+# Ver los datos extraidos de una autoescuela junto a su historial de emails
+python -m app.cli show --autoescuela-id 12
+```
+
+Principios de diseño (ver `app/llm/extractor.py` y `app/llm/pipeline.py`):
+
+- **Nunca se inventa un dato.** El schema que se le pasa al modelo no obliga
+  a rellenar ningún campo de datos: si la autoescuela no menciona algo, el
+  modelo lo omite y se guarda como `None`. La instrucción "no adivines" está
+  reforzada explícitamente en el prompt con ejemplos.
+- **Se distingue dato explícito de interpretación de la IA**: el modelo
+  siempre debe indicar si la respuesta es ambigua (`follow_up_needed`,
+  `missing_info`) o si el lenguaje usado es aproximado
+  (`information_is_uncertain`), en vez de mezclarlo silenciosamente con los
+  datos concretos.
+- **Ahorro de coste**: solo se analizan respuestas nuevas
+  (`EmailMessage.processed=False`); un email ya analizado nunca se vuelve a
+  mandar al LLM salvo que uses `escalate-ambiguous` explícitamente. Por
+  defecto se usa el modelo barato (`LLM_MODEL_CHEAP`, Haiku); el modelo caro
+  (`LLM_MODEL_SMART`, Sonnet) solo se usa si tú decides escalar.
+- **Las correcciones manuales nunca se pisan**: si corriges un campo con
+  `set-field` (o más adelante desde la interfaz), pasa a `source=manual` y
+  el pipeline lo respeta en análisis futuros — solo pisa campos en
+  `source=ai`.
+- **Se guarda todo**: cada llamada al LLM crea un `ExtractionResult` con la
+  salida completa (para auditar qué dijo la IA y por qué), además de
+  actualizar el valor "vigente" de cada campo en `FieldValue`.
+- Si `follow_up_needed=true`, el estado de la autoescuela pasa a
+  `follow_up_needed` automáticamente (salvo que ya esté en un estado
+  avanzado como `interested`/`rejected`/`selected`).
 
 ## Estado del proyecto (fases)
 
 - [x] Fase 1 — Estructura, base de datos, modelo de Autoescuela, importación CSV
 - [x] Fase 2 — Integración Gmail (OAuth) + envío de emails
 - [x] Fase 3 — Lectura y almacenamiento de respuestas
-- [ ] Fase 4 — Extracción estructurada mediante LLM
+- [x] Fase 4 — Extracción estructurada mediante LLM
 - [ ] Fase 5 — Ranking y evaluación
 - [ ] Fase 6 — Interfaz (Streamlit)
 - [ ] Fase 7 — Follow-ups y mejoras

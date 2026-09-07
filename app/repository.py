@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.gmail_reader import apply_reply_side_effects
-from app.models import Autoescuela, EmailMessage
+from app.models import Autoescuela, EmailMessage, FieldValue
 
 
 def list_autoescuelas(session: Session, status: str | None = None) -> list[Autoescuela]:
@@ -60,3 +60,36 @@ def assign_email_to_autoescuela(session: Session, email_message_id: int, autoesc
 
     session.flush()
     return email_message
+
+
+def list_field_values(session: Session, autoescuela_id: int) -> list[FieldValue]:
+    stmt = (
+        select(FieldValue)
+        .where(FieldValue.autoescuela_id == autoescuela_id)
+        .order_by(FieldValue.field_name)
+    )
+    return list(session.scalars(stmt).all())
+
+
+def set_field_value_manual(session: Session, autoescuela_id: int, field_name: str, value, updated_by: str = "manual") -> FieldValue:
+    """Corrige a mano el valor de un campo. Conserva el valor de IA anterior
+    en ai_original_value y marca source='manual' para que la extraccion
+    automatica no lo vuelva a pisar (ver app.llm.pipeline)."""
+    stmt = select(FieldValue).where(
+        FieldValue.autoescuela_id == autoescuela_id,
+        FieldValue.field_name == field_name,
+    )
+    field_value = session.scalars(stmt).first()
+
+    if field_value is None:
+        field_value = FieldValue(autoescuela_id=autoescuela_id, field_name=field_name)
+        session.add(field_value)
+    elif field_value.source == "ai":
+        field_value.ai_original_value = field_value.value
+
+    field_value.value = value
+    field_value.source = "manual"
+    field_value.updated_by = updated_by
+
+    session.flush()
+    return field_value

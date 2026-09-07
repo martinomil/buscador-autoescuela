@@ -16,10 +16,16 @@ Uso:
     python -m app.cli show --autoescuela-id ID
     python -m app.cli list-unmatched
     python -m app.cli assign-email --message-id ID --autoescuela-id ID
+
+    # Fase 4: extraccion con IA
+    python -m app.cli process-replies [--limit N] [--model MODEL]
+    python -m app.cli escalate-ambiguous [--model MODEL]
+    python -m app.cli set-field --autoescuela-id ID --field NOMBRE --value VALOR
 """
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 
@@ -33,6 +39,8 @@ from app.email_sender import (
 )
 from app.gmail_reader import check_new_replies
 from app.importer import import_csv
+from app.llm.extractor import ExtractionError
+from app.llm.pipeline import ProcessingError, escalate_ambiguous, process_unprocessed_replies
 from app.logging_setup import setup_logging
 from app.repository import (
     assign_email_to_autoescuela,
@@ -40,7 +48,9 @@ from app.repository import (
     get_autoescuela,
     list_autoescuelas,
     list_emails_for_autoescuela,
+    list_field_values,
     list_unmatched_inbound,
+    set_field_value_manual,
 )
 
 logger = logging.getLogger(__name__)
@@ -228,6 +238,14 @@ def cmd_show(args: argparse.Namespace) -> None:
             f"Primer contacto: {autoescuela.first_contact_date or '-'} | Ultima respuesta: {autoescuela.last_reply_date or '-'}"
         )
 
+        field_values = list_field_values(session, autoescuela.id)
+        if field_values:
+            print("-" * 72)
+            print("Datos extraidos:")
+            for fv in field_values:
+                marker = "(manual)" if fv.source == "manual" else "(ia)"
+                print(f"  {fv.field_name:<28} = {fv.value!r} {marker}")
+
         emails = list_emails_for_autoescuela(session, autoescuela.id)
         if not emails:
             print("\nSin comunicaciones registradas todavia.")
@@ -260,6 +278,50 @@ def cmd_assign_email(args: argparse.Namespace) -> None:
     with get_session() as session:
         email_message = assign_email_to_autoescuela(session, args.message_id, args.autoescuela_id)
         print(f"EmailMessage {email_message.id} asociado a autoescuela id={args.autoescuela_id}")
+
+
+def cmd_process_replies(args: argparse.Namespace) -> None:
+    with get_session() as session:
+        result = process_unprocessed_replies(session, model=args.model, limit=args.limit)
+        print(f"Analizadas: {len(result['processed'])} | Errores: {len(result['errors'])}")
+        for extraction_result in result["processed"]:
+            flag = " [FOLLOW-UP]" if extraction_result.follow_up_needed else ""
+            print(f"  - autoescuela_id={extraction_result.autoescuela_id}{flag}")
+        for email_message in result["errors"]:
+            print(f"  - ERROR en email_message_id={email_message.id} (ver logs arriba)")
+
+
+def cmd_escalate_ambiguous(args: argparse.Namespace) -> None:
+    with get_session() as session:
+        result = escalate_ambiguous(session, model=args.model)
+        print(f"Reanalizadas con modelo mas potente: {len(result['processed'])} | Errores: {len(result['errors'])}")
+
+
+def _parse_cli_value(raw_value: str):
+    """Permite pasar numeros/booleanos/objetos JSON, o texto plano si no es JSON valido.
+
+    Ejemplos: --value 32 -> 32 (int); --value true -> True; --value "alta demanda"
+    -> "alta demanda" (texto tal cual, sin necesidad de comillas anidadas);
+    --value '{"value": 2, "unit": "weeks"}' -> dict.
+    """
+    try:
+        return json.loads(raw_value)
+    except json.JSONDecodeError:
+        return raw_value
+
+
+def cmd_set_field(args: argparse.Namespace) -> None:
+    with get_session() as session:
+        autoescuela = get_autoescuela(session, args.autoescuela_id)
+        if autoescuela is None:
+            print(f"No existe ninguna autoescuela con id={args.autoescuela_id}")
+            return
+        value = _parse_cli_value(args.value)
+        field_value = set_field_value_manual(session, args.autoescuela_id, args.field, value, updated_by="cli")
+        print(
+            f"Campo {field_value.field_name!r} de {autoescuela.name} actualizado a {field_value.value!r} "
+            f"(source=manual, valor de IA anterior: {field_value.ai_original_value!r})"
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -325,6 +387,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_assign.add_argument("--autoescuela-id", type=int, required=True)
     p_assign.set_defaults(func=cmd_assign_email)
 
+    p_process = subparsers.add_parser(
+        "process-replies", help="Analiza con IA las respuestas nuevas y extrae datos estructurados"
+    )
+    p_process.add_argument("--limit", type=int, default=None, help="Maximo de respuestas a analizar en esta ejecucion")
+    p_process.add_argument("--model", default=None, help="Modelo a usar (por defecto LLM_MODEL_CHEAP de .env)")
+    p_process.set_defaults(func=cmd_process_replies)
+
+    p_escalate = subparsers.add_parser(
+        "escalate-ambiguous",
+        help="Reanaliza con un modelo mas potente las respuestas marcadas como ambiguas (follow_up_needed)",
+    )
+    p_escalate.add_argument("--model", default=None, help="Modelo a usar (por defecto LLM_MODEL_SMART de .env)")
+    p_escalate.set_defaults(func=cmd_escalate_ambiguous)
+
+    p_set_field = subparsers.add_parser(
+        "set-field", help="Corrige a mano un dato extraido (queda marcado como source=manual)"
+    )
+    p_set_field.add_argument("--autoescuela-id", type=int, required=True)
+    p_set_field.add_argument("--field", required=True, help="Nombre del campo, p.ej. practice_price")
+    p_set_field.add_argument("--value", required=True, help="Nuevo valor (se guarda como texto)")
+    p_set_field.set_defaults(func=cmd_set_field)
+
     return parser
 
 
@@ -340,7 +424,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         args.func(args)
-    except (FileNotFoundError, ValueError) as exc:
+    except (FileNotFoundError, ValueError, ExtractionError, ProcessingError) as exc:
         print(f"[ERROR] {exc}")
         return 1
     return 0
