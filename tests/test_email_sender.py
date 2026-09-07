@@ -112,6 +112,35 @@ def test_send_initial_email_override_to_redirects_delivery_but_keeps_association
     assert fake_send_message[0]["to"] == "martin@example.com"
     assert email_message.autoescuela_id == a.id
     assert email_message.recipient == "martin@example.com"
+    # Es un envio de prueba: se registra pero no cuenta como contacto real.
+    assert email_message.kind == "test"
+    assert a.status == "not_contacted"
+    assert a.emails_sent_count == 0
+    assert a.first_contact_date is None
+
+
+def test_send_test_does_not_block_or_count_towards_real_send(session, fake_send_message):
+    """send-test (override_to) debe poder repetirse libremente y no debe
+    impedir que luego se haga el envio real a la autoescuela."""
+    a = _make_autoescuela(session)
+    service = FakeGmailService()
+
+    send_initial_email(session, service, a, override_to="martin@example.com")
+    session.commit()
+    send_initial_email(session, service, a, override_to="martin@example.com")
+    session.commit()
+
+    assert has_sent_kind(session, a.id, "initial") is False
+    assert has_sent_kind(session, a.id, "test") is True
+
+    # El envio real sigue siendo posible sin necesidad de --force.
+    real_message = send_initial_email(session, service, a)
+    session.commit()
+
+    assert real_message.kind == "initial"
+    assert real_message.recipient == "autoescuela@example.com"
+    assert a.status == "email_sent"
+    assert a.emails_sent_count == 1
 
 
 def test_has_sent_kind(session, fake_send_message):

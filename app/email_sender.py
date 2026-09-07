@@ -67,11 +67,17 @@ def send_initial_email(
 ) -> EmailMessage:
     """Envia (de verdad) el email inicial a una autoescuela y lo registra.
 
-    Si `override_to` se indica, el correo se envia a esa direccion (util
-    para pruebas: enviarte a ti mismo el email real que recibiria la
-    autoescuela) pero se sigue registrando asociado a `autoescuela`.
+    Si `override_to` se indica, se trata de un envio de PRUEBA: el correo se
+    manda a esa direccion (util para enviarte a ti mismo el contenido real
+    que recibiria la autoescuela), se registra igualmente asociado a
+    `autoescuela` (kind="test") para poder auditarlo, pero NO cuenta como
+    contacto real: no bloquea futuros envios ni actualiza el estado/contador
+    de la autoescuela.
     """
-    if not force and has_sent_kind(session, autoescuela.id, "initial"):
+    is_test = override_to is not None
+    kind = "test" if is_test else "initial"
+
+    if not is_test and not force and has_sent_kind(session, autoescuela.id, "initial"):
         raise DuplicateEmailError(
             f"Ya se envio un email inicial a {autoescuela.name!r} (id={autoescuela.id}). "
             "Usa force=True si realmente quieres reenviarlo."
@@ -87,7 +93,7 @@ def send_initial_email(
     email_message = EmailMessage(
         autoescuela_id=autoescuela.id,
         direction="outbound",
-        kind="initial",
+        kind=kind,
         gmail_message_id=sent.get("id"),
         gmail_thread_id=sent.get("threadId"),
         sender=config.GMAIL_USER_EMAIL or None,
@@ -98,11 +104,12 @@ def send_initial_email(
     )
     session.add(email_message)
 
-    if autoescuela.status == "not_contacted":
-        autoescuela.status = "email_sent"
-    if autoescuela.first_contact_date is None:
-        autoescuela.first_contact_date = now
-    autoescuela.emails_sent_count += 1
+    if not is_test:
+        if autoescuela.status == "not_contacted":
+            autoescuela.status = "email_sent"
+        if autoescuela.first_contact_date is None:
+            autoescuela.first_contact_date = now
+        autoescuela.emails_sent_count += 1
 
     session.flush()
     logger.info(

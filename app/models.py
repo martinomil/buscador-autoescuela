@@ -44,7 +44,7 @@ AUTOESCUELA_STATUSES = (
 )
 
 EMAIL_DIRECTIONS = ("outbound", "inbound")
-EMAIL_KINDS = ("initial", "follow_up", "other")
+EMAIL_KINDS = ("initial", "follow_up", "test", "other")
 FIELD_VALUE_SOURCES = ("ai", "manual")
 
 

@@ -8,7 +8,7 @@ Uso:
     # Fase 2: Gmail
     python -m app.cli gmail-auth
     python -m app.cli send-preview [--status ESTADO | --ids 1,2,3]
-    python -m app.cli send-test --autoescuela-id ID [--to email@ejemplo.com] [--force]
+    python -m app.cli send-test --autoescuela-id ID [--to email@ejemplo.com]
     python -m app.cli send-batch [--status ESTADO | --ids 1,2,3] [--confirm]
 """
 from __future__ import annotations
@@ -20,7 +20,6 @@ import sys
 from app import config
 from app.db import get_session, init_db
 from app.email_sender import (
-    DuplicateEmailError,
     has_sent_kind,
     preview_initial_email,
     send_batch,
@@ -124,15 +123,12 @@ def cmd_send_test(args: argparse.Namespace) -> None:
         print(f"Asunto: {preview['subject']}")
 
         service = get_gmail_service()
-        try:
-            email_message = send_initial_email(
-                session, service, autoescuela, override_to=to, force=args.force
-            )
-        except DuplicateEmailError as exc:
-            print(f"[BLOQUEADO] {exc}")
-            print("Usa --force si realmente quieres volver a enviarlo.")
-            return
+        email_message = send_initial_email(session, service, autoescuela, override_to=to)
 
+        print(
+            "Nota: al ser un envio de prueba (kind='test'), NO cuenta como contacto real: "
+            "no cambia el estado de la autoescuela ni bloquea el envio real posterior."
+        )
         print(
             f"Email enviado y registrado correctamente: EmailMessage id={email_message.id}, "
             f"gmail_message_id={email_message.gmail_message_id}, thread_id={email_message.gmail_thread_id}"
@@ -209,7 +205,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_test.add_argument("--autoescuela-id", type=int, required=True, help="Id de la autoescuela a usar como contenido")
     p_test.add_argument("--to", default=None, help="Direccion de destino real (por defecto GMAIL_USER_EMAIL)")
-    p_test.add_argument("--force", action="store_true", help="Ignora la proteccion anti-duplicados")
     p_test.set_defaults(func=cmd_send_test)
 
     p_batch = subparsers.add_parser(

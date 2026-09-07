@@ -131,7 +131,9 @@ python -m app.cli send-preview --ids 1
 
 # 3) Enviar UN único email de prueba: usa el contenido real de la
 #    autoescuela 1 pero lo redirige a tu propia cuenta (GMAIL_USER_EMAIL o
-#    --to), y SÍ registra el EmailMessage asociado a esa autoescuela
+#    --to). Se registra (kind="test") para poder auditarlo, pero NO cuenta
+#    como contacto real: puedes repetirlo tantas veces como quieras sin que
+#    afecte al estado de la autoescuela ni bloquee el envio real posterior.
 python -m app.cli send-test --autoescuela-id 1
 
 # 4) Revisa en tu bandeja de entrada que el email de prueba llegó bien, y
@@ -150,9 +152,10 @@ python -m app.cli send-batch --ids 3,4,7 --confirm   # solo estas autoescuelas
 
 Protecciones incluidas:
 
-- **Anti-duplicados**: antes de enviar el email inicial a una autoescuela se
-  comprueba si ya se le envió uno; si es así, se bloquea (o se omite en
-  `send-batch`) salvo que uses `--force` explícitamente en `send-test`.
+- **Anti-duplicados**: antes de enviar el email inicial (real) a una
+  autoescuela se comprueba si ya se le envió uno; si es así, se omite
+  automáticamente en `send-batch`. Los envíos de prueba (`send-test`) no
+  cuentan como contacto real, así que puedes repetirlos sin restricción.
 - **Rate limiting**: pausa configurable entre envíos y límite máximo de
   envíos por ejecución (`EMAIL_SEND_DELAY_SECONDS`, `EMAIL_MAX_PER_RUN` en `.env`).
 - **Plantilla editable**: `templates/email_inicial.txt` se puede editar
