@@ -5,14 +5,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))  # permit
 
 import pandas as pd
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 from app.db import get_session
 from app.formatting import format_duration, format_price, format_range
 from app.ranking_service import SORT_KEYS, build_ranking_rows, sort_ranking_rows
 
 st.set_page_config(page_title="Ranking", page_icon="🏆", layout="wide")
+st_autorefresh(interval=60_000, key="ranking_autorefresh")
 st.title("🏆 Ranking de autoescuelas")
-st.caption("Ordenado según tus prioridades: inicio de prácticas, frecuencia, tiempo hasta examen y precio.")
+st.caption("Ordenado según tus prioridades: inicio de prácticas, frecuencia, tiempo hasta examen y precio. Esta página se actualiza sola cada minuto.")
 
 VERDICT_EMOJI = {
     "highly_recommended": "🟢",

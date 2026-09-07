@@ -5,6 +5,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))  # permit
 
 import pandas as pd
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 from app.db import get_session
 from app.formatting import format_duration, format_price, format_range
@@ -12,7 +13,9 @@ from app.models import AUTOESCUELA_STATUSES
 from app.ranking_service import build_ranking_rows
 
 st.set_page_config(page_title="Autoescuelas", page_icon="📋", layout="wide")
+st_autorefresh(interval=60_000, key="autoescuelas_autorefresh")
 st.title("📋 Autoescuelas")
+st.caption("Esta página se actualiza sola cada minuto.")
 
 with get_session() as session:
     rows = build_ranking_rows(session)

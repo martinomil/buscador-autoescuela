@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # permite `from app import ...`
 
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 from app.db import get_session
 from app.gmail_reader import check_new_replies
@@ -12,7 +13,9 @@ from app.ranking_service import evaluate_all, sort_ranking_rows, build_ranking_r
 from app.repository import count_by_status
 
 st.set_page_config(page_title="Buscador autoescuela", page_icon="🚗", layout="wide")
-st.title("🚗 Buscador de autoescuela — Dashboard")
+st_autorefresh(interval=60_000, key="home_autorefresh")
+st.title("Buscador de autoescuela — Dashboard")
+st.caption("Esta página se actualiza sola cada minuto.")
 
 VERDICT_EMOJI = {
     "highly_recommended": "🟢",

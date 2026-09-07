@@ -16,6 +16,7 @@ python-dateutil>=2.9
 # Fase 6: interfaz
 streamlit>=1.38
 pandas>=2.2
+streamlit-autorefresh>=1.0
 
 # Tests
 pytest>=8.0

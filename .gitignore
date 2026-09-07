@@ -17,3 +17,6 @@ data/*.db-journal
 .DS_Store
 .vscode/
 .idea/
+
+# Logs de tareas programadas
+logs/
