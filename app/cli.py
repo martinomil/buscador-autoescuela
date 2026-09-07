@@ -10,6 +10,12 @@ Uso:
     python -m app.cli send-preview [--status ESTADO | --ids 1,2,3]
     python -m app.cli send-test --autoescuela-id ID [--to email@ejemplo.com]
     python -m app.cli send-batch [--status ESTADO | --ids 1,2,3] [--confirm]
+
+    # Fase 3: lectura de respuestas
+    python -m app.cli check-replies
+    python -m app.cli show --autoescuela-id ID
+    python -m app.cli list-unmatched
+    python -m app.cli assign-email --message-id ID --autoescuela-id ID
 """
 from __future__ import annotations
 
@@ -25,9 +31,17 @@ from app.email_sender import (
     send_batch,
     send_initial_email,
 )
+from app.gmail_reader import check_new_replies
 from app.importer import import_csv
 from app.logging_setup import setup_logging
-from app.repository import count_by_status, get_autoescuela, list_autoescuelas
+from app.repository import (
+    assign_email_to_autoescuela,
+    count_by_status,
+    get_autoescuela,
+    list_autoescuelas,
+    list_emails_for_autoescuela,
+    list_unmatched_inbound,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +189,79 @@ def cmd_send_batch(args: argparse.Namespace) -> None:
             print(f"  - ERROR enviando a: {a.name} <{a.email}> (ver logs arriba)")
 
 
+def cmd_check_replies(_args: argparse.Namespace) -> None:
+    from app.gmail_client import get_gmail_service
+
+    with get_session() as session:
+        service = get_gmail_service()
+        result = check_new_replies(session, service)
+
+        print(f"Respuestas nuevas asociadas: {len(result['new'])}")
+        for m in result["new"]:
+            print(f"  - [{m.id}] {m.autoescuela.name}: {m.subject!r}")
+
+        if result["unmatched"]:
+            print(f"Mensajes SIN asociar (revisar manualmente): {len(result['unmatched'])}")
+            for m in result["unmatched"]:
+                print(f"  - [{m.id}] de {m.sender!r}: {m.subject!r}")
+            print("Usa 'assign-email --message-id ID --autoescuela-id ID' para asociarlos.")
+
+        if not result["new"] and not result["unmatched"]:
+            print("No hay respuestas nuevas.")
+
+
+def cmd_show(args: argparse.Namespace) -> None:
+    with get_session() as session:
+        autoescuela = get_autoescuela(session, args.autoescuela_id)
+        if autoescuela is None:
+            print(f"No existe ninguna autoescuela con id={args.autoescuela_id}")
+            return
+
+        print("=" * 72)
+        print(f"{autoescuela.name} (id={autoescuela.id}) — {autoescuela.status}")
+        print(f"Ciudad: {autoescuela.city or '-'} | Email: {autoescuela.email} | Tel: {autoescuela.phone or '-'}")
+        print(f"Web: {autoescuela.website or '-'}")
+        if autoescuela.notes:
+            print(f"Notas: {autoescuela.notes}")
+        print(
+            f"Emails enviados: {autoescuela.emails_sent_count} | Respuestas: {autoescuela.replies_count} | "
+            f"Primer contacto: {autoescuela.first_contact_date or '-'} | Ultima respuesta: {autoescuela.last_reply_date or '-'}"
+        )
+
+        emails = list_emails_for_autoescuela(session, autoescuela.id)
+        if not emails:
+            print("\nSin comunicaciones registradas todavia.")
+            return
+
+        for m in emails:
+            print("-" * 72)
+            arrow = "-> (enviado)" if m.direction == "outbound" else "<- (recibido)"
+            print(f"{arrow} {m.timestamp or m.created_at} | kind={m.kind or '-'}")
+            print(f"De: {m.sender or '-'} | Para: {m.recipient or '-'}")
+            print(f"Asunto: {m.subject or '-'}")
+            print(m.body_text or "(sin texto)")
+
+
+def cmd_list_unmatched(_args: argparse.Namespace) -> None:
+    with get_session() as session:
+        messages = list_unmatched_inbound(session)
+        if not messages:
+            print("No hay mensajes sin asociar.")
+            return
+        for m in messages:
+            print("=" * 72)
+            print(f"[{m.id}] {m.timestamp or m.created_at} | De: {m.sender!r} | Asunto: {m.subject!r}")
+            print(m.body_text or "(sin texto)")
+        print("=" * 72)
+        print(f"Total: {len(messages)}. Usa 'assign-email --message-id ID --autoescuela-id ID' para asociarlos.")
+
+
+def cmd_assign_email(args: argparse.Namespace) -> None:
+    with get_session() as session:
+        email_message = assign_email_to_autoescuela(session, args.message_id, args.autoescuela_id)
+        print(f"EmailMessage {email_message.id} asociado a autoescuela id={args.autoescuela_id}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Gestion de busqueda de autoescuela")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -214,6 +301,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_batch.add_argument("--ids", default=None, help="Lista de ids separados por comas (ignora --status)")
     p_batch.add_argument("--confirm", action="store_true", help="Envia de verdad (si no, solo simula)")
     p_batch.set_defaults(func=cmd_send_batch)
+
+    p_check = subparsers.add_parser(
+        "check-replies", help="Busca respuestas nuevas en Gmail y las guarda"
+    )
+    p_check.set_defaults(func=cmd_check_replies)
+
+    p_show = subparsers.add_parser(
+        "show", help="Muestra el detalle e historial de comunicaciones de una autoescuela"
+    )
+    p_show.add_argument("--autoescuela-id", type=int, required=True)
+    p_show.set_defaults(func=cmd_show)
+
+    p_unmatched = subparsers.add_parser(
+        "list-unmatched", help="Lista respuestas recibidas que no se pudieron asociar automaticamente"
+    )
+    p_unmatched.set_defaults(func=cmd_list_unmatched)
+
+    p_assign = subparsers.add_parser(
+        "assign-email", help="Asocia manualmente un email sin asociar a una autoescuela"
+    )
+    p_assign.add_argument("--message-id", type=int, required=True)
+    p_assign.add_argument("--autoescuela-id", type=int, required=True)
+    p_assign.set_defaults(func=cmd_assign_email)
 
     return parser
 

@@ -91,7 +91,10 @@ class EmailMessage(Base):
     __tablename__ = "email_messages"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    autoescuela_id: Mapped[int] = mapped_column(ForeignKey("autoescuelas.id"), nullable=False)
+    # Nullable: una respuesta entrante que no se ha podido asociar a ninguna
+    # autoescuela automaticamente se guarda igualmente (nunca se descarta),
+    # a la espera de asignacion manual.
+    autoescuela_id: Mapped[int | None] = mapped_column(ForeignKey("autoescuelas.id"), nullable=True)
 
     direction: Mapped[str] = mapped_column(String(20), nullable=False)  # outbound | inbound
     kind: Mapped[str | None] = mapped_column(String(20), nullable=True)  # initial | follow_up | other
@@ -112,7 +115,7 @@ class EmailMessage(Base):
     # Marca si esta respuesta entrante ya ha sido procesada por el LLM.
     processed: Mapped[bool] = mapped_column(default=False)
 
-    autoescuela: Mapped[Autoescuela] = relationship(back_populates="emails")
+    autoescuela: Mapped[Autoescuela | None] = relationship(back_populates="emails")
     extraction_results: Mapped[list["ExtractionResult"]] = relationship(back_populates="email_message")
 
     def __repr__(self) -> str:  # pragma: no cover

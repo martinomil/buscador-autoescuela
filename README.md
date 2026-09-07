@@ -33,6 +33,7 @@ app/                  Lógica de negocio (sin UI)
   gmail_client.py       Autenticación OAuth + envío de emails (Gmail API)
   email_templates.py    Carga/renderizado de plantillas de email
   email_sender.py        Orquesta plantilla + Gmail + registro en BD + anti-duplicados
+  gmail_reader.py         Detecta, parsea y asocia respuestas nuevas (Fase 3)
   llm/                  (Fase 4) extracción y scoring con LLM
 streamlit_app/         (Fase 6) interfaz
 templates/              Plantillas de email editables (texto plano)
@@ -164,6 +165,45 @@ Protecciones incluidas:
 - **`send-batch` sin `--confirm`** siempre simula primero: nunca se envía
   nada por accidente en el primer uso.
 
+## Leer respuestas (Fase 3)
+
+```powershell
+# Busca respuestas nuevas en Gmail y las guarda (no se envia nada, solo lectura)
+python -m app.cli check-replies
+
+# Ver el detalle y todo el historial de comunicaciones de una autoescuela
+python -m app.cli show --autoescuela-id 1
+
+# Respuestas recibidas que NO se pudieron asociar automaticamente a ninguna
+# autoescuela (nunca se descartan, se guardan para revision manual)
+python -m app.cli list-unmatched
+
+# Asociar manualmente un mensaje sin asociar a la autoescuela correcta
+python -m app.cli assign-email --message-id 7 --autoescuela-id 12
+```
+
+Cómo funciona `check-replies`:
+
+- Busca en Gmail solo mensajes recibidos **después de la fecha del primer
+  contacto** que hayas hecho (no escanea todo tu historial de correo), y
+  descarta los que ya tenga guardados (por `gmail_message_id`), así que
+  ejecutarlo varias veces es seguro y barato.
+- **Asociación por hilo de Gmail** (la señal más fiable): si la respuesta
+  llega en el mismo hilo que un email que enviamos, se asocia a esa
+  autoescuela automáticamente.
+- **Alternativa por remitente**: si el hilo no coincide (p. ej. respondieron
+  desde otra dirección), se compara el remitente con el email registrado de
+  cada autoescuela.
+- **Nunca se pierde una respuesta**: si no se puede asociar de ninguna
+  forma, se guarda igualmente (sin autoescuela asignada) y aparece en
+  `list-unmatched` para que la asocies tú a mano con `assign-email`.
+- Tolera respuestas en HTML: si el correo no trae parte de texto plano, se
+  extrae un texto legible a partir del HTML.
+- Al asociar una respuesta se actualiza automáticamente el estado de la
+  autoescuela a `replied`, la fecha de última respuesta y el contador de
+  respuestas (salvo que ya esté en un estado más avanzado como
+  `interested`, `rejected` o `selected`, que no se pisan solos).
+
 ## Credenciales que necesitarás más adelante
 
 - **ANTHROPIC_API_KEY (Fase 4)**: clave de la API de Anthropic (console.anthropic.com).
@@ -172,7 +212,7 @@ Protecciones incluidas:
 
 - [x] Fase 1 — Estructura, base de datos, modelo de Autoescuela, importación CSV
 - [x] Fase 2 — Integración Gmail (OAuth) + envío de emails
-- [ ] Fase 3 — Lectura y almacenamiento de respuestas
+- [x] Fase 3 — Lectura y almacenamiento de respuestas
 - [ ] Fase 4 — Extracción estructurada mediante LLM
 - [ ] Fase 5 — Ranking y evaluación
 - [ ] Fase 6 — Interfaz (Streamlit)
