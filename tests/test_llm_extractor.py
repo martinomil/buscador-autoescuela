@@ -3,10 +3,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 from app.llm.extractor import (
     EXTRACTION_FIELDS,
     ExtractionError,
+    _coerce_field,
     build_user_message,
     extract_reply,
 )
@@ -55,7 +57,7 @@ def test_extract_reply_only_returns_mentioned_fields_never_invents():
     }
     client = FakeAnthropicClient(response_input)
 
-    result = extract_reply("preguntas...", "Cobramos 32€ la práctica de 45 min, hasta 4 por semana.", model="fake-model", client=client)
+    result = extract_reply("preguntas...", "Cobramos 32€ la práctica de 45 min, hasta 4 por semana.", model="fake-model", client=client, provider="anthropic")
 
     assert result["practice_price"] == 32
     assert result["practice_duration_minutes"] == 45
@@ -80,7 +82,7 @@ def test_extract_reply_preserves_uncertainty_flags_and_notes():
     }
     client = FakeAnthropicClient(response_input)
 
-    result = extract_reply("preguntas...", "Unas 3 semanas mas o menos.", client=client)
+    result = extract_reply("preguntas...", "Unas 3 semanas mas o menos.", client=client, provider="anthropic")
 
     assert result["waiting_time_to_start"] == {"value": 3, "unit": "weeks"}
     assert result["information_is_uncertain"] is True
@@ -92,7 +94,7 @@ def test_extract_reply_preserves_uncertainty_flags_and_notes():
 def test_extract_reply_sends_expected_model_and_tool_choice():
     client = FakeAnthropicClient({"follow_up_needed": False, "missing_info": [], "notes": ""})
 
-    extract_reply("preguntas", "respuesta", model="claude-haiku-test", client=client)
+    extract_reply("preguntas", "respuesta", model="claude-haiku-test", client=client, provider="anthropic")
 
     call = client.messages.calls[0]
     assert call["model"] == "claude-haiku-test"
@@ -102,10 +104,121 @@ def test_extract_reply_sends_expected_model_and_tool_choice():
 
 def test_extract_reply_raises_if_no_tool_use_block_returned():
     with pytest.raises(ExtractionError):
-        extract_reply("preguntas", "respuesta", client=FakeAnthropicClientNoToolUse())
+        extract_reply("preguntas", "respuesta", client=FakeAnthropicClientNoToolUse(), provider="anthropic")
 
 
 def test_extract_reply_raises_without_api_key_and_no_client(monkeypatch):
     monkeypatch.setattr("app.llm.extractor.config.ANTHROPIC_API_KEY", "")
     with pytest.raises(ExtractionError, match="ANTHROPIC_API_KEY"):
-        extract_reply("preguntas", "respuesta")
+        extract_reply("preguntas", "respuesta", provider="anthropic")
+
+
+# --- Proveedor Ollama (gratis, local) ---
+
+
+class FakeOllamaResponse:
+    def __init__(self, payload: dict, status_ok: bool = True):
+        self._payload = payload
+        self._status_ok = status_ok
+
+    def raise_for_status(self):
+        if not self._status_ok:
+            raise requests.HTTPError("400 Bad Request")
+
+    def json(self):
+        return self._payload
+
+
+def _ollama_payload(arguments) -> dict:
+    return {"message": {"tool_calls": [{"function": {"name": "extract_autoescuela_reply", "arguments": arguments}}]}}
+
+
+def test_extract_reply_with_ollama_provider(monkeypatch):
+    arguments = {"practice_price": 32, "follow_up_needed": False, "missing_info": [], "notes": ""}
+
+    def fake_post(url, json, timeout):
+        assert "localhost:11434" in url
+        assert json["model"] == "llama3.1"
+        return FakeOllamaResponse(_ollama_payload(arguments))
+
+    monkeypatch.setattr("app.llm.extractor.requests.post", fake_post)
+
+    result = extract_reply("preguntas", "respuesta", provider="ollama", model="llama3.1")
+
+    assert result["practice_price"] == 32
+    assert result["follow_up_needed"] is False
+
+
+def test_extract_reply_with_ollama_parses_string_arguments(monkeypatch):
+    import json as json_module
+
+    arguments_str = json_module.dumps({"follow_up_needed": True, "missing_info": ["precio"], "notes": ""})
+
+    monkeypatch.setattr(
+        "app.llm.extractor.requests.post",
+        lambda url, json, timeout: FakeOllamaResponse(_ollama_payload(arguments_str)),
+    )
+
+    result = extract_reply("preguntas", "respuesta", provider="ollama")
+    assert result["follow_up_needed"] is True
+    assert result["missing_info"] == ["precio"]
+
+
+def test_extract_reply_with_ollama_raises_when_no_tool_calls(monkeypatch):
+    monkeypatch.setattr(
+        "app.llm.extractor.requests.post",
+        lambda url, json, timeout: FakeOllamaResponse({"message": {"content": "no tool call"}}),
+    )
+    with pytest.raises(ExtractionError, match="tool_calls"):
+        extract_reply("preguntas", "respuesta", provider="ollama")
+
+
+def test_extract_reply_with_ollama_raises_on_connection_error(monkeypatch):
+    def fake_post(url, json, timeout):
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr("app.llm.extractor.requests.post", fake_post)
+
+    with pytest.raises(ExtractionError, match="Ollama"):
+        extract_reply("preguntas", "respuesta", provider="ollama")
+
+
+def test_extract_reply_unknown_provider_raises():
+    with pytest.raises(ExtractionError, match="LLM_PROVIDER"):
+        extract_reply("preguntas", "respuesta", provider="chatgpt")
+
+
+# --- Validacion defensiva de tipos (_coerce_field) ---
+
+
+def test_coerce_field_accepts_valid_duration():
+    assert _coerce_field("waiting_time_to_start", {"value": 3, "unit": "weeks"}) == {"value": 3, "unit": "weeks"}
+
+
+def test_coerce_field_rejects_duration_missing_unit():
+    assert _coerce_field("waiting_time_to_start", {"value": 3}) is None
+
+
+def test_coerce_field_rejects_duration_with_invalid_unit():
+    assert _coerce_field("waiting_time_to_start", {"value": 3, "unit": "lunas"}) is None
+
+
+def test_coerce_field_unwraps_number_mistakenly_wrapped_in_object():
+    # Un modelo local a veces envuelve un numero simple como {"value": 32}.
+    assert _coerce_field("practice_price", {"value": 32}) == 32.0
+
+
+def test_coerce_field_rejects_non_numeric_price():
+    assert _coerce_field("practice_price", "treinta euros") is None
+
+
+def test_coerce_field_rejects_dict_for_string_field():
+    assert _coerce_field("availability", {"unexpected": "shape"}) is None
+
+
+def test_coerce_field_rejects_non_boolean_for_boolean_field():
+    assert _coerce_field("information_is_uncertain", "si") is None
+
+
+def test_coerce_field_passes_through_none():
+    assert _coerce_field("practice_price", None) is None

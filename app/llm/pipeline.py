@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import config
-from app.llm.extractor import EXTRACTION_FIELDS, extract_reply
+from app.llm.extractor import EXTRACTION_FIELDS, default_model_for_provider, extract_reply
 from app.models import Autoescuela, EmailMessage, ExtractionResult, FieldValue
 
 logger = logging.getLogger(__name__)
@@ -83,8 +83,8 @@ def process_email_message(session: Session, email_message: EmailMessage, model: 
     original_question_text = _find_original_question_text(session, email_message.autoescuela_id)
     reply_text = email_message.body_text or ""
 
-    used_model = model or config.LLM_MODEL_CHEAP
-    result_dict = extract_reply(original_question_text, reply_text, model=used_model)
+    used_model = model or default_model_for_provider()
+    result_dict = extract_reply(original_question_text, reply_text, model=model)
 
     extraction_result = ExtractionResult(
         email_message_id=email_message.id,

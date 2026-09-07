@@ -1,15 +1,23 @@
-"""Extraccion estructurada de una respuesta de autoescuela mediante Claude.
+"""Extraccion estructurada de una respuesta de autoescuela mediante un LLM.
 
-Regla de oro: NUNCA inventar. Se usa "tool use" (function calling) de la API
-de Anthropic para forzar una salida estructurada, y ningun campo de datos es
-obligatorio en el schema: si la autoescuela no menciona un dato, el modelo
-debe omitir ese campo por completo (se guarda como None), nunca adivinarlo.
+Regla de oro: NUNCA inventar. Se usa "tool use" / function calling para
+forzar una salida estructurada, y ningun campo de datos es obligatorio en el
+schema: si la autoescuela no menciona un dato, el modelo debe omitir ese
+campo por completo (se guarda como None), nunca adivinarlo.
+
+Soporta dos proveedores intercambiables (LLM_PROVIDER en .env):
+- "anthropic" (de pago, mas fiable siguiendo el schema).
+- "ollama" (gratis, modelo local, algo menos fiable con el formato exacto:
+  por eso toda salida pasa por _coerce_field, que descarta silenciosamente
+  cualquier valor con una forma inesperada en vez de guardarlo tal cual).
 """
 from __future__ import annotations
 
+import json
 import logging
 
 import anthropic
+import requests
 
 from app import config
 
@@ -126,6 +134,12 @@ class ExtractionError(Exception):
     """Fallo al obtener una extraccion estructurada del LLM."""
 
 
+def default_model_for_provider(provider: str | None = None) -> str:
+    """Modelo por defecto segun el proveedor (para elegir Y para loguear qué se uso)."""
+    provider = (provider or config.LLM_PROVIDER or "anthropic").lower()
+    return config.LLM_MODEL_OLLAMA if provider == "ollama" else config.LLM_MODEL_CHEAP
+
+
 def build_user_message(original_question_text: str, reply_text: str) -> str:
     return (
         f"EMAIL QUE ENVIAMOS (preguntas):\n{original_question_text or '(no disponible)'}\n\n"
@@ -133,7 +147,7 @@ def build_user_message(original_question_text: str, reply_text: str) -> str:
     )
 
 
-def _get_client() -> anthropic.Anthropic:
+def _get_anthropic_client() -> anthropic.Anthropic:
     if not config.ANTHROPIC_API_KEY:
         raise ExtractionError(
             "Falta ANTHROPIC_API_KEY en .env. Consigue una clave en "
@@ -142,19 +156,8 @@ def _get_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 
-def extract_reply(
-    original_question_text: str,
-    reply_text: str,
-    model: str | None = None,
-    client: anthropic.Anthropic | None = None,
-) -> dict:
-    """Llama al LLM y devuelve un dict con EXTRACTION_FIELDS + META_FIELDS.
-
-    Los campos de datos no mencionados en la respuesta vienen como None
-    (nunca se inventan). `client` es inyectable para tests.
-    """
-    client = client or _get_client()
-    model = model or config.LLM_MODEL_CHEAP
+def _call_anthropic(user_message: str, model: str, client: anthropic.Anthropic | None) -> dict:
+    client = client or _get_anthropic_client()
 
     message = client.messages.create(
         model=model,
@@ -168,15 +171,156 @@ def extract_reply(
             }
         ],
         tool_choice={"type": "tool", "name": EXTRACTION_TOOL_NAME},
-        messages=[{"role": "user", "content": build_user_message(original_question_text, reply_text)}],
+        messages=[{"role": "user", "content": user_message}],
     )
 
     tool_use = next((block for block in message.content if getattr(block, "type", None) == "tool_use"), None)
     if tool_use is None:
         raise ExtractionError("El modelo no devolvio una respuesta estructurada (tool_use)")
+    return tool_use.input
 
-    raw = tool_use.input
-    result = {field: raw.get(field) for field in EXTRACTION_FIELDS}
+
+def _call_ollama(user_message: str, model: str) -> dict:
+    url = f"{config.OLLAMA_BASE_URL}/api/chat"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": EXTRACTION_TOOL_NAME,
+                    "description": "Registra los datos estructurados extraidos de la respuesta de la autoescuela.",
+                    "parameters": EXTRACTION_SCHEMA,
+                },
+            }
+        ],
+        "stream": False,
+    }
+
+    try:
+        response = requests.post(url, json=payload, timeout=120)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise ExtractionError(
+            f"No se pudo contactar con Ollama en {config.OLLAMA_BASE_URL}. "
+            f"¿Esta 'ollama serve' en marcha y el modelo {model!r} descargado ('ollama pull {model}')? "
+            f"Detalle: {exc}"
+        ) from exc
+
+    data = response.json()
+    tool_calls = data.get("message", {}).get("tool_calls")
+    if not tool_calls:
+        raise ExtractionError(
+            f"El modelo local {model!r} no devolvio una llamada a herramienta (tool_calls). "
+            "Prueba con otro modelo que soporte tool calling (p.ej. llama3.1 o qwen2.5)."
+        )
+
+    arguments = tool_calls[0]["function"]["arguments"]
+    if isinstance(arguments, str):
+        arguments = json.loads(arguments)
+    return arguments
+
+
+# Que "forma" de valor se espera por campo, para poder descartar con
+# seguridad una salida mal formada de un modelo menos fiable (frecuente con
+# modelos locales pequeños) en vez de guardarla tal cual.
+_FIELD_KINDS = {
+    "waiting_time_to_start": "duration",
+    "earliest_start_date": "string",
+    "practice_price": "number",
+    "practice_duration_minutes": "integer",
+    "practices_per_week_min": "integer",
+    "practices_per_week_max": "integer",
+    "estimated_time_to_exam": "duration",
+    "earliest_exam_date": "string",
+    "enrollment_fee": "number",
+    "exam_fee": "number",
+    "other_fees": "string",
+    "availability": "string",
+    "requirements": "string",
+    "relevant_conditions": "string",
+    "accepts_already_passed_theory": "boolean",
+    "information_is_uncertain": "boolean",
+}
+
+_VALID_DURATION_UNITS = {"days", "weeks", "months"}
+
+
+def _coerce_field(field_name: str, value):
+    """Valida/normaliza un valor segun el tipo esperado del campo.
+
+    Si la forma no encaja (p.ej. un modelo local envuelve un numero en un
+    objeto por error), se descarta devolviendo None y se registra un aviso,
+    en vez de guardar un dato con forma inconsistente.
+    """
+    if value is None:
+        return None
+
+    kind = _FIELD_KINDS[field_name]
+    try:
+        if kind == "duration":
+            if not isinstance(value, dict):
+                raise ValueError("se esperaba un objeto {value, unit}")
+            duration_value, unit = value.get("value"), value.get("unit")
+            if isinstance(duration_value, bool) or not isinstance(duration_value, (int, float)):
+                raise ValueError("value no numerico")
+            if unit not in _VALID_DURATION_UNITS:
+                raise ValueError(f"unit invalida: {unit!r}")
+            return {"value": duration_value, "unit": unit}
+
+        if kind in ("number", "integer"):
+            if isinstance(value, dict):
+                value = value.get("value")  # algunos modelos locales envuelven el numero
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError("no numerico")
+            return int(value) if kind == "integer" else float(value)
+
+        if kind == "string":
+            if isinstance(value, (dict, list)):
+                raise ValueError("se esperaba texto")
+            text = str(value).strip()
+            return text or None
+
+        if kind == "boolean":
+            if not isinstance(value, bool):
+                raise ValueError("no booleano")
+            return value
+
+    except ValueError as exc:
+        logger.warning("Campo %r con forma inesperada (%s): %r, se descarta", field_name, exc, value)
+        return None
+
+    return None
+
+
+def extract_reply(
+    original_question_text: str,
+    reply_text: str,
+    model: str | None = None,
+    client: anthropic.Anthropic | None = None,
+    provider: str | None = None,
+) -> dict:
+    """Llama al LLM y devuelve un dict con EXTRACTION_FIELDS + META_FIELDS.
+
+    Los campos de datos no mencionados en la respuesta vienen como None
+    (nunca se inventan). `client` es inyectable para tests (solo se usa con
+    provider="anthropic"). `provider` por defecto viene de LLM_PROVIDER en .env.
+    """
+    provider = (provider or config.LLM_PROVIDER or "anthropic").lower()
+    user_message = build_user_message(original_question_text, reply_text)
+
+    if provider == "anthropic":
+        raw = _call_anthropic(user_message, model or config.LLM_MODEL_CHEAP, client)
+    elif provider == "ollama":
+        raw = _call_ollama(user_message, model or config.LLM_MODEL_OLLAMA)
+    else:
+        raise ExtractionError(f"LLM_PROVIDER desconocido: {provider!r} (usa 'anthropic' u 'ollama')")
+
+    result = {field: _coerce_field(field, raw.get(field)) for field in EXTRACTION_FIELDS}
     result["follow_up_needed"] = bool(raw.get("follow_up_needed", False))
     result["missing_info"] = raw.get("missing_info") or []
     result["notes"] = raw.get("notes") or ""

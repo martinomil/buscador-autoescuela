@@ -24,9 +24,15 @@ GMAIL_CREDENTIALS_FILE = BASE_DIR / os.getenv("GMAIL_CREDENTIALS_FILE", "credent
 GMAIL_TOKEN_FILE = BASE_DIR / os.getenv("GMAIL_TOKEN_FILE", "token.json")
 GMAIL_USER_EMAIL = os.getenv("GMAIL_USER_EMAIL", "")
 
+# "anthropic" (de pago, mas fiable) u "ollama" (gratis, local, algo menos fiable).
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic").lower()
+
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 LLM_MODEL_CHEAP = os.getenv("LLM_MODEL_CHEAP", "claude-haiku-4-5-20251001")
 LLM_MODEL_SMART = os.getenv("LLM_MODEL_SMART", "claude-sonnet-5")
+
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+LLM_MODEL_OLLAMA = os.getenv("LLM_MODEL_OLLAMA", "qwen3:8b")
 
 EMAIL_SEND_DELAY_SECONDS = _get_int("EMAIL_SEND_DELAY_SECONDS", 5)
 EMAIL_MAX_PER_RUN = _get_int("EMAIL_MAX_PER_RUN", 30)

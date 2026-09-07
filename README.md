@@ -208,11 +208,55 @@ Cómo funciona `check-replies`:
 
 ## Extracción con IA (Fase 4)
 
-Necesitas una clave de la API de Anthropic (no confundir con tu suscripción
-Claude Pro, que es un producto distinto): crea una cuenta en
+Hay dos proveedores intercambiables, elegidos con `LLM_PROVIDER` en `.env`:
+
+### Opción gratis: Ollama (modelo local)
+
+Si ya tienes [Ollama](https://ollama.com/) instalado (o lo instalas), puedes
+usar un modelo local sin ningún coste ni API key. Configuración:
+
+```env
+LLM_PROVIDER=ollama
+LLM_MODEL_OLLAMA=qwen3:8b
+```
+
+```powershell
+ollama pull qwen3:8b   # ~5 GB de descarga, una sola vez
+```
+
+**Por qué `qwen3:8b`** y no otro modelo: se probaron `llama3.1`, `qwen2.5`,
+`gemma2` y `qwen3:8b` con la misma bateria de casos (incluyendo respuestas
+ambiguas donde NO se debe rellenar un dato). `gemma2` no soporta tool
+calling. `llama3.1` y `qwen2.5` extraen bien los datos cuantitativos, pero en
+las pruebas `llama3.1` llegó a inventar `accepts_already_passed_theory=false`
+sin que el email dijera nada al respecto — justo el tipo de invención que
+este proyecto prohibe. `qwen3:8b` fue el único que, en las mismas pruebas,
+omitió correctamente ese campo (y otros no mencionados) en todos los casos.
+Aun así, **ningún modelo local es tan fiable como Claude siguiendo
+instrucciones estrictas de "no inventes"**: la app está diseñada para que
+siempre puedas comparar el dato extraído con el texto original (`show`) y
+corregirlo (`set-field`) — conviene revisar con algo mas de atencion cuando
+uses el proveedor gratuito.
+
+Necesitas una GPU o CPU razonable (qwen3:8b ocupa ~5 GB en disco y RAM/VRAM).
+Si `ollama serve` no esta en marcha, `process-replies` fallará con un error
+claro indicándolo.
+
+### Opción de pago: Anthropic (Claude)
+
+Más fiable, coste mínimo para este volumen. Necesitas una clave de la API de
+Anthropic (**no** es lo mismo que tu suscripción Claude Pro, que es un
+producto distinto sin acceso a la API): crea una cuenta en
 [console.anthropic.com](https://console.anthropic.com/), genera una API key
-y añádela en `.env` como `ANTHROPIC_API_KEY=sk-ant-...`. Con el volumen de
-este proyecto (decenas de emails) el coste esperado es de céntimos.
+y añádela en `.env`:
+
+```env
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Con el volumen de este proyecto (decenas de emails) el coste esperado es de
+céntimos.
 
 ```powershell
 # Analiza con IA todas las respuestas nuevas (no reanaliza las ya procesadas)
@@ -247,9 +291,17 @@ Principios de diseño (ver `app/llm/extractor.py` y `app/llm/pipeline.py`):
   datos concretos.
 - **Ahorro de coste**: solo se analizan respuestas nuevas
   (`EmailMessage.processed=False`); un email ya analizado nunca se vuelve a
-  mandar al LLM salvo que uses `escalate-ambiguous` explícitamente. Por
-  defecto se usa el modelo barato (`LLM_MODEL_CHEAP`, Haiku); el modelo caro
-  (`LLM_MODEL_SMART`, Sonnet) solo se usa si tú decides escalar.
+  mandar al LLM salvo que uses `escalate-ambiguous` explícitamente. Con
+  `LLM_PROVIDER=anthropic`, por defecto se usa el modelo barato
+  (`LLM_MODEL_CHEAP`, Haiku); el modelo caro (`LLM_MODEL_SMART`, Sonnet) solo
+  se usa si decides escalar. `escalate-ambiguous` esta pensado para el
+  proveedor Anthropic (pasar de Haiku a Sonnet); con `LLM_PROVIDER=ollama` no
+  aporta gran cosa salvo que tengas dos modelos locales de calidad distinta.
+- **Validación defensiva por campo** (`_coerce_field` en `extractor.py`):
+  cualquier valor que no encaje con el tipo esperado (p.ej. un modelo local
+  envolviendo un número en un objeto por error) se descarta con un aviso en
+  el log en vez de guardarse tal cual — util especialmente con el proveedor
+  gratuito, que seguirá el schema con menos precision que Claude.
 - **Las correcciones manuales nunca se pisan**: si corriges un campo con
   `set-field` (o más adelante desde la interfaz), pasa a `source=manual` y
   el pipeline lo respeta en análisis futuros — solo pisa campos en

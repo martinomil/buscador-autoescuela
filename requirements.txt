@@ -9,6 +9,7 @@ google-auth-oauthlib>=1.2
 
 # Fase 4-5: LLM y parsing de emails
 anthropic>=0.40
+requests>=2.31
 beautifulsoup4>=4.12
 python-dateutil>=2.9
 
