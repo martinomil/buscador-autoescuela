@@ -1,0 +1,3 @@
+Subject: Hola {{name}}
+
+Cuerpo de prueba para {{name}} en {{city}}.
