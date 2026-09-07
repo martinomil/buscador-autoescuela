@@ -35,8 +35,12 @@ app/                  Lógica de negocio (sin UI)
   email_sender.py        Orquesta plantilla + Gmail + registro en BD + anti-duplicados
   gmail_reader.py         Detecta, parsea y asocia respuestas nuevas (Fase 3)
   llm/
-    extractor.py           Prompt + schema + llamada a Claude (extraccion pura)
+    extractor.py           Prompt + schema + llamada al LLM (extraccion pura)
     pipeline.py             Orquesta: coge respuestas nuevas, extrae, guarda (Fase 4)
+    evaluator.py            Prompt + schema para el razonamiento cualitativo (Fase 5)
+  scoring.py              Puntuacion deterministica 0-100, sin LLM (Fase 5)
+  ranking_service.py       Orquesta: score + narrativa LLM + tabla de ranking (Fase 5)
+  formatting.py            Helpers de formato (desconocido -> "—", duraciones, precios)
 streamlit_app/         (Fase 6) interfaz
 templates/              Plantillas de email editables (texto plano)
   email_inicial.txt      Plantilla del primer contacto (editable sin tocar código)
@@ -313,12 +317,65 @@ Principios de diseño (ver `app/llm/extractor.py` y `app/llm/pipeline.py`):
   `follow_up_needed` automáticamente (salvo que ya esté en un estado
   avanzado como `interested`/`rejected`/`selected`).
 
+## Ranking y evaluación (Fase 5)
+
+```powershell
+# Evalua una autoescuela concreta (requiere que ya tenga datos extraidos)
+python -m app.cli evaluate --autoescuela-id 12
+
+# Evalua todas las que tengan datos, omitiendo las que no han cambiado
+# desde la ultima evaluacion (ahorra llamadas al LLM)
+python -m app.cli evaluate-all
+python -m app.cli evaluate-all --force   # reevalua igualmente
+
+# Tabla comparativa, ordenable
+python -m app.cli ranking
+python -m app.cli ranking --sort-by precio
+python -m app.cli ranking --sort-by inicio --status replied
+```
+
+**La puntuación (0-100) es siempre determinista** (`app/scoring.py`, sin
+LLM, 100% auditable) — no depende de que el LLM "decida" un número:
+
+| Componente | Puntos máx. | Basado en |
+|---|---|---|
+| Inicio de prácticas | 25 | `waiting_time_to_start` (menos tiempo = más puntos) |
+| Frecuencia de prácticas | 25 | media de `practices_per_week_min/max` (más = más puntos) |
+| Tiempo hasta examen | 20 | `estimated_time_to_exam` (menos tiempo = más puntos) |
+| Precio | 15 | `practice_price` (menos = más puntos; prioridad baja a propósito) |
+| Confianza/disponibilidad | 15 | resta puntos por cada dato desconocido o marcado como incierto |
+
+**Un dato desconocido nunca se trata como "malo"**: su componente recibe una
+puntuación neutra (ni alta ni baja) en vez de 0, y el "descuento" por falta
+de información se aplica una sola vez, en el componente de
+confianza/disponibilidad — así una autoescuela con datos excelentes pero
+incompletos no queda penalizada dos veces por lo mismo. `show --autoescuela-id
+ID` imprime el desglose completo (formato `+puntos / máximo`), marcando qué
+componentes son `unknown`/`partial`.
+
+El **razonamiento cualitativo** (`reasoning`, `pros`, `cons`, `risks`) sí usa
+el LLM (`app/llm/evaluator.py`), pero solo para explicar en lenguaje natural
+una puntuación ya calculada — nunca para cambiar el número. `evaluate-all`
+solo vuelve a llamar al LLM si algún dato de la autoescuela cambió desde la
+última evaluación (o si le pasas `--force`).
+
+**Hallazgo real durante las pruebas** (con el proveedor gratuito Ollama):
+en una respuesta que decía literalmente "no sabría decirte cuánto
+exactamente" sobre el tiempo de espera, el modelo rellenó igualmente
+`waiting_time_to_start` con `{value: 0, unit: "months"}` — inventando un
+"inicio inmediato" que infló el componente más importante del score a su
+máximo. Se reforzó el prompt para prohibir explícitamente el valor `0`
+salvo que la autoescuela diga algo como "ahora mismo" o "inmediatamente", y
+se verificó que el mismo caso ya se extrae correctamente (campo omitido).
+Aun así, es un buen recordatorio de por qué conviene revisar los datos con
+`show` antes de tomar una decisión, especialmente con el proveedor gratuito.
+
 ## Estado del proyecto (fases)
 
 - [x] Fase 1 — Estructura, base de datos, modelo de Autoescuela, importación CSV
 - [x] Fase 2 — Integración Gmail (OAuth) + envío de emails
 - [x] Fase 3 — Lectura y almacenamiento de respuestas
 - [x] Fase 4 — Extracción estructurada mediante LLM
-- [ ] Fase 5 — Ranking y evaluación
+- [x] Fase 5 — Ranking y evaluación
 - [ ] Fase 6 — Interfaz (Streamlit)
 - [ ] Fase 7 — Follow-ups y mejoras

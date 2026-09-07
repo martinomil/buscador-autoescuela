@@ -21,6 +21,11 @@ Uso:
     python -m app.cli process-replies [--limit N] [--model MODEL]
     python -m app.cli escalate-ambiguous [--model MODEL]
     python -m app.cli set-field --autoescuela-id ID --field NOMBRE --value VALOR
+
+    # Fase 5: ranking y evaluacion
+    python -m app.cli evaluate --autoescuela-id ID [--model MODEL]
+    python -m app.cli evaluate-all [--model MODEL] [--force]
+    python -m app.cli ranking [--sort-by score|inicio|precio|frecuencia|examen|localidad] [--status ESTADO]
 """
 from __future__ import annotations
 
@@ -37,11 +42,21 @@ from app.email_sender import (
     send_batch,
     send_initial_email,
 )
+from app.formatting import UNKNOWN, format_duration, format_price, format_range
 from app.gmail_reader import check_new_replies
 from app.importer import import_csv
+from app.llm.evaluator import EvaluationError
 from app.llm.extractor import ExtractionError
 from app.llm.pipeline import ProcessingError, escalate_ambiguous, process_unprocessed_replies
 from app.logging_setup import setup_logging
+from app.ranking_service import (
+    RankingError,
+    build_ranking_rows,
+    evaluate_all,
+    evaluate_autoescuela,
+    get_latest_evaluation,
+    sort_ranking_rows,
+)
 from app.repository import (
     assign_email_to_autoescuela,
     count_by_status,
@@ -246,6 +261,22 @@ def cmd_show(args: argparse.Namespace) -> None:
                 marker = "(manual)" if fv.source == "manual" else "(ia)"
                 print(f"  {fv.field_name:<28} = {fv.value!r} {marker}")
 
+        evaluation = get_latest_evaluation(session, autoescuela.id)
+        if evaluation is not None:
+            print("-" * 72)
+            print(f"PUNTUACION: {evaluation.score}/100 ({evaluation.verdict})")
+            for component in evaluation.breakdown.values():
+                marker = "" if component["status"] == "known" else f" ({component['status']})"
+                print(f"  {component['label']:<28} +{component['points']:>3} / {component['max']}{marker}")
+            if evaluation.reasoning:
+                print(f"\nRazonamiento: {evaluation.reasoning}")
+            if evaluation.pros:
+                print("Pros: " + "; ".join(evaluation.pros))
+            if evaluation.cons:
+                print("Contras: " + "; ".join(evaluation.cons))
+            if evaluation.risks:
+                print("Riesgos: " + "; ".join(evaluation.risks))
+
         emails = list_emails_for_autoescuela(session, autoescuela.id)
         if not emails:
             print("\nSin comunicaciones registradas todavia.")
@@ -322,6 +353,50 @@ def cmd_set_field(args: argparse.Namespace) -> None:
             f"Campo {field_value.field_name!r} de {autoescuela.name} actualizado a {field_value.value!r} "
             f"(source=manual, valor de IA anterior: {field_value.ai_original_value!r})"
         )
+
+
+def cmd_evaluate(args: argparse.Namespace) -> None:
+    with get_session() as session:
+        evaluation = evaluate_autoescuela(session, args.autoescuela_id, model=args.model)
+        session.commit()
+        print(f"Autoescuela {args.autoescuela_id}: {evaluation.score}/100 ({evaluation.verdict})")
+        print(evaluation.reasoning)
+
+
+def cmd_evaluate_all(args: argparse.Namespace) -> None:
+    with get_session() as session:
+        result = evaluate_all(session, model=args.model, force=args.force)
+        print(
+            f"Evaluadas: {len(result['evaluated'])} | Sin cambios (omitidas): {len(result['skipped'])} | "
+            f"Sin datos todavia: {len(result['no_data'])} | Errores: {len(result['errors'])}"
+        )
+        for a in result["errors"]:
+            print(f"  - ERROR evaluando: {a.name} (ver logs arriba)")
+
+
+def cmd_ranking(args: argparse.Namespace) -> None:
+    with get_session() as session:
+        rows = build_ranking_rows(session)
+        if args.status:
+            rows = [r for r in rows if r["status"] == args.status]
+        rows = sort_ranking_rows(rows, args.sort_by)
+
+        if not rows:
+            print("No hay autoescuelas que coincidan con el filtro.")
+            return
+
+        header = f"{'ID':>4} {'Autoescuela':<30} {'Inicio':<12} {'Precio':<8} {'Duracion':<10} {'Practicas/sem':<14} {'Examen':<12} {'Score':>6}"
+        print(header)
+        print("-" * len(header))
+        for r in rows:
+            practices = format_range(r["practices_per_week_min"], r["practices_per_week_max"])
+            duration = f"{r['practice_duration_minutes']:g} min" if r["practice_duration_minutes"] is not None else UNKNOWN
+            score = f"{r['score']}" if r["score"] is not None else UNKNOWN
+            print(
+                f"{r['id']:>4} {r['name'][:30]:<30} {format_duration(r['waiting_time_to_start']):<12} "
+                f"{format_price(r['practice_price']):<8} {duration:<10} {practices:<14} "
+                f"{format_duration(r['estimated_time_to_exam']):<12} {score:>6}"
+            )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -409,6 +484,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_set_field.add_argument("--value", required=True, help="Nuevo valor (se guarda como texto)")
     p_set_field.set_defaults(func=cmd_set_field)
 
+    p_evaluate = subparsers.add_parser(
+        "evaluate", help="Calcula el score y la explicacion cualitativa de una autoescuela"
+    )
+    p_evaluate.add_argument("--autoescuela-id", type=int, required=True)
+    p_evaluate.add_argument("--model", default=None)
+    p_evaluate.set_defaults(func=cmd_evaluate)
+
+    p_evaluate_all = subparsers.add_parser(
+        "evaluate-all", help="Evalua todas las autoescuelas con datos extraidos (omite las que no han cambiado)"
+    )
+    p_evaluate_all.add_argument("--model", default=None)
+    p_evaluate_all.add_argument("--force", action="store_true", help="Reevalua aunque no haya cambios")
+    p_evaluate_all.set_defaults(func=cmd_evaluate_all)
+
+    p_ranking = subparsers.add_parser("ranking", help="Muestra la tabla comparativa de autoescuelas")
+    p_ranking.add_argument(
+        "--sort-by", default="score",
+        choices=["score", "inicio", "precio", "frecuencia", "examen", "localidad"],
+    )
+    p_ranking.add_argument("--status", default=None, help="Filtra por estado")
+    p_ranking.set_defaults(func=cmd_ranking)
+
     return parser
 
 
@@ -424,7 +521,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         args.func(args)
-    except (FileNotFoundError, ValueError, ExtractionError, ProcessingError) as exc:
+    except (FileNotFoundError, ValueError, ExtractionError, ProcessingError, EvaluationError, RankingError) as exc:
         print(f"[ERROR] {exc}")
         return 1
     return 0

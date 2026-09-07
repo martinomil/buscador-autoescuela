@@ -119,7 +119,9 @@ EXTRACTION_SCHEMA = {
 
 SYSTEM_PROMPT = f"""Eres un asistente que extrae informacion estructurada de respuestas por email de autoescuelas de Galicia (España) a una consulta sobre clases practicas del permiso B.
 
-REGLA MAS IMPORTANTE: Solo extraes informacion EXPLICITAMENTE indicada en el email de la autoescuela. Si un dato no se menciona o no queda claro, OMITE ese campo por completo en tu respuesta. Nunca adivines, estimes ni infieras un valor que no este dicho. Por ejemplo, "tenemos bastante lista de espera" NO permite rellenar waiting_time_to_start con un numero concreto: omite ese campo y explica la situacion en notes y/o missing_info.
+REGLA MAS IMPORTANTE: Solo extraes informacion EXPLICITAMENTE indicada en el email de la autoescuela. Si un dato no se menciona o no queda claro, OMITE ese campo por completo en tu respuesta. Nunca adivines, estimes ni infieras un valor que no este dicho. Por ejemplo, "tenemos bastante lista de espera" o "no sabria decirte cuanto exactamente" NO permiten rellenar waiting_time_to_start con un numero concreto: omite ese campo y explica la situacion en notes y/o missing_info.
+
+CUIDADO ESPECIAL con el valor 0: nunca pongas value=0 en waiting_time_to_start ni en estimated_time_to_exam salvo que la autoescuela diga explicitamente algo como "ahora mismo", "inmediatamente" o "sin espera". Una respuesta vaga o que reconoce no saber el plazo (p.ej. "no sabria decirte cuanto", "no tengo la cifra exacta", "bastante demanda ahora mismo") significa que el campo debe OMITIRSE, nunca rellenarse con 0.
 
 Los emails pueden estar en español, gallego o ingles; pueden venir con firma, ser muy cortos o muy largos, contener HTML residual, y usar formatos como precios "30€", "30 euros", "30 €/clase", tiempos "3 semanas", "mes y medio", "hasta diciembre", y rangos "3-4 practicas" (usa min=3, max=4; si solo dan un numero, usa ese mismo valor en min y max).
 
