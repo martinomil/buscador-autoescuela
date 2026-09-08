@@ -36,6 +36,7 @@ def utcnow() -> dt.datetime:
 AUTOESCUELA_STATUSES = (
     "not_contacted",
     "email_sent",
+    "bounced",
     "replied",
     "follow_up_needed",
     "interested",
@@ -44,7 +45,7 @@ AUTOESCUELA_STATUSES = (
 )
 
 EMAIL_DIRECTIONS = ("outbound", "inbound")
-EMAIL_KINDS = ("initial", "follow_up", "test", "other")
+EMAIL_KINDS = ("initial", "follow_up", "test", "bounce", "other")
 FIELD_VALUE_SOURCES = ("ai", "manual")
 
 

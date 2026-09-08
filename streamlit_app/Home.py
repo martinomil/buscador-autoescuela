@@ -62,7 +62,7 @@ with left:
         )
     else:
         for r in scored:
-            emoji = VERDICT_EMOJI.get(r["verdict"], "")
+            emoji = "❌" if r["status"] in ("rejected", "bounced") else VERDICT_EMOJI.get(r["verdict"], "")
             st.markdown(f"**{emoji} {r['name']}** ({r['city'] or '—'}) — {r['score']}/100")
         st.page_link("pages/3_Ranking.py", label="Ver ranking completo →")
 
@@ -78,7 +78,8 @@ with right:
                     service = get_gmail_service()
                     result = check_new_replies(session, service)
                 st.success(
-                    f"Nuevas asociadas: {len(result['new'])} | Sin asociar: {len(result['unmatched'])}"
+                    f"Nuevas asociadas: {len(result['new'])} | Rebotes: {len(result['bounced'])} | "
+                    f"Sin asociar: {len(result['unmatched'])}"
                 )
             except FileNotFoundError as exc:
                 st.error(str(exc))

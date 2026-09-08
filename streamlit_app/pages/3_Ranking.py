@@ -42,8 +42,12 @@ if not scored:
     st.info("Todavía no hay autoescuelas evaluadas. Ve al Dashboard y pulsa 'Recalcular ranking'.")
 else:
     for r in scored:
-        emoji = VERDICT_EMOJI.get(r["verdict"], "")
-        verdict_label = VERDICT_LABELS.get(r["verdict"], r["verdict"])
+        if r["status"] in ("rejected", "bounced"):
+            emoji = "❌"
+            verdict_label = "Rebotó (no entregado)" if r["status"] == "bounced" else "Descartada"
+        else:
+            emoji = VERDICT_EMOJI.get(r["verdict"], "")
+            verdict_label = VERDICT_LABELS.get(r["verdict"], r["verdict"])
         st.markdown(f"### {emoji} {r['name']} — {r['score']}/100 ({verdict_label})")
         cols = st.columns(5)
         cols[0].metric("Inicio", format_duration(r["waiting_time_to_start"]))

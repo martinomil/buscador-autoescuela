@@ -220,5 +220,5 @@ def test_check_new_replies_skips_already_known_messages(session):
 def test_check_new_replies_returns_early_when_nobody_contacted(session):
     service = FakeGmailService([], {})
     result = check_new_replies(session, service)
-    assert result == {"new": [], "unmatched": []}
+    assert result == {"new": [], "unmatched": [], "bounced": []}
     assert len(service.messages_api.list_calls) == 0

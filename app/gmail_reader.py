@@ -37,6 +37,11 @@ logger = logging.getLogger(__name__)
 # pisan automaticamente: se asumen decisiones ya tomadas por el usuario.
 STATUSES_UPDATED_ON_REPLY = {"not_contacted", "email_sent", "follow_up_needed", "replied"}
 
+# Remitentes tipicos de una notificacion de rebote (el envio original no
+# llego a la autoescuela). No es una respuesta real, asi que no debe pisar
+# el hilo de conversacion ni pasar por el analisis de IA.
+BOUNCE_SENDER_LOCALPARTS = {"mailer-daemon", "postmaster"}
+
 
 def _known_message_ids(session: Session) -> set[str]:
     stmt = select(EmailMessage.gmail_message_id).where(EmailMessage.gmail_message_id.is_not(None))
@@ -175,6 +180,16 @@ def _extract_email_address(header_value: str | None) -> str | None:
     return addr.lower() or None
 
 
+def _is_bounce_notification(parsed: dict) -> bool:
+    """True si el mensaje es un aviso de entrega fallida (mailer-daemon), no
+    una respuesta real de la autoescuela."""
+    sender_addr = _extract_email_address(parsed.get("sender"))
+    if not sender_addr or "@" not in sender_addr:
+        return False
+    local_part = sender_addr.split("@", 1)[0]
+    return local_part in BOUNCE_SENDER_LOCALPARTS
+
+
 def apply_reply_side_effects(autoescuela: Autoescuela, timestamp: dt.datetime | None) -> None:
     """Actualiza contador/fecha/estado de una autoescuela al recibir una respuesta.
 
@@ -197,7 +212,7 @@ def check_new_replies(session: Session, gmail_service) -> dict:
     query = build_search_query(session)
     if query is None:
         logger.info("Todavia no se ha contactado a ninguna autoescuela; no hay nada que comprobar")
-        return {"new": [], "unmatched": []}
+        return {"new": [], "unmatched": [], "bounced": []}
 
     logger.info("Buscando respuestas nuevas en Gmail (query=%r)", query)
     known_ids = _known_message_ids(session)
@@ -210,10 +225,12 @@ def check_new_replies(session: Session, gmail_service) -> dict:
 
     new_messages: list[EmailMessage] = []
     unmatched: list[EmailMessage] = []
+    bounced: list[EmailMessage] = []
 
     for message_id in candidate_ids:
         raw = gmail_service.users().messages().get(userId="me", id=message_id, format="full").execute()
         parsed = parse_gmail_message(raw)
+        is_bounce = _is_bounce_notification(parsed)
 
         autoescuela_id = thread_map.get(parsed["gmail_thread_id"])
         if autoescuela_id is None:
@@ -224,12 +241,29 @@ def check_new_replies(session: Session, gmail_service) -> dict:
         email_message = EmailMessage(
             autoescuela_id=autoescuela_id,
             direction="inbound",
-            processed=False,
+            kind="bounce" if is_bounce else None,
+            # Un rebote no tiene nada que un LLM deba analizar; se marca
+            # processed=True para que process-replies lo ignore.
+            processed=is_bounce,
             **parsed,
         )
         session.add(email_message)
 
-        if autoescuela_id is not None:
+        if is_bounce:
+            bounced.append(email_message)
+            if autoescuela_id is not None:
+                autoescuela = session.get(Autoescuela, autoescuela_id)
+                if autoescuela.status in STATUSES_UPDATED_ON_REPLY:
+                    autoescuela.status = "bounced"
+                logger.warning(
+                    "Rebote de entrega para %s (autoescuela_id=%s, message_id=%s); no se trata como respuesta real",
+                    autoescuela.name, autoescuela_id, message_id,
+                )
+            else:
+                logger.warning(
+                    "Rebote de entrega sin autoescuela asociada (message_id=%s)", message_id,
+                )
+        elif autoescuela_id is not None:
             autoescuela = session.get(Autoescuela, autoescuela_id)
             apply_reply_side_effects(autoescuela, parsed["timestamp"])
             new_messages.append(email_message)
@@ -250,4 +284,4 @@ def check_new_replies(session: Session, gmail_service) -> dict:
             )
 
     session.flush()
-    return {"new": new_messages, "unmatched": unmatched}
+    return {"new": new_messages, "unmatched": unmatched, "bounced": bounced}

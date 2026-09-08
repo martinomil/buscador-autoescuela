@@ -161,6 +161,14 @@ def build_ranking_rows(session: Session) -> list[dict]:
     return rows
 
 
+
+# Estados que, aunque tengan una puntuacion alta, no deben aparecer como
+# recomendados: la autoescuela ya ha rechazado o descartado explicitamente
+# al usuario, asi que se envian siempre al final del ranking sin importar
+# el criterio de orden elegido.
+DEMOTED_STATUSES = {"rejected", "bounced"}
+
+
 def sort_ranking_rows(rows: list[dict], sort_by: str = "score") -> list[dict]:
     if sort_by not in SORT_KEYS:
         raise RankingError(f"Criterio de orden desconocido: {sort_by!r} (usa uno de {SORT_KEYS})")
@@ -178,4 +186,5 @@ def sort_ranking_rows(rows: list[dict], sort_by: str = "score") -> list[dict]:
     else:  # localidad
         key = lambda r: (r["city"] or "", r["name"])
 
-    return sorted(rows, key=key)
+    demoted_key = lambda r: (1 if r.get("status") in DEMOTED_STATUSES else 0, key(r))
+    return sorted(rows, key=demoted_key)

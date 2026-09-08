@@ -225,13 +225,19 @@ def cmd_check_replies(_args: argparse.Namespace) -> None:
         for m in result["new"]:
             print(f"  - [{m.id}] {m.autoescuela.name}: {m.subject!r}")
 
+        if result["bounced"]:
+            print(f"Rebotes de entrega detectados (no son respuestas reales): {len(result['bounced'])}")
+            for m in result["bounced"]:
+                nombre = m.autoescuela.name if m.autoescuela_id else "sin asociar"
+                print(f"  - [{m.id}] {nombre}: {m.subject!r}")
+
         if result["unmatched"]:
             print(f"Mensajes SIN asociar (revisar manualmente): {len(result['unmatched'])}")
             for m in result["unmatched"]:
                 print(f"  - [{m.id}] de {m.sender!r}: {m.subject!r}")
             print("Usa 'assign-email --message-id ID --autoescuela-id ID' para asociarlos.")
 
-        if not result["new"] and not result["unmatched"]:
+        if not result["new"] and not result["unmatched"] and not result["bounced"]:
             print("No hay respuestas nuevas.")
 
 
