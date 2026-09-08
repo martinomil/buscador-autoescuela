@@ -19,9 +19,15 @@ def test_score_inicio_fast_start_gets_max_points():
 
 def test_score_inicio_converts_weeks_and_months():
     points_weeks, _ = score_inicio({"value": 2, "unit": "weeks"})  # 14 dias
-    assert points_weeks == 20
+    assert points_weeks == 25
     points_months, _ = score_inicio({"value": 2, "unit": "months"})  # 60 dias
-    assert points_months == 8
+    assert points_months == 20
+
+
+def test_score_inicio_worst_case_is_seven_months_or_more():
+    points, status = score_inicio({"value": 7, "unit": "months"})  # 210 dias
+    assert points == 3
+    assert status == "known"
 
 
 def test_score_inicio_unknown_is_neutral_not_zero():

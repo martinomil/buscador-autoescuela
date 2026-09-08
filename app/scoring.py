@@ -84,9 +84,11 @@ def _score_higher_is_better(value: float | None, thresholds: list[tuple[float, i
 
 
 def score_inicio(waiting_time_to_start: dict | None) -> tuple[int, str]:
+    """Tramos de 42 dias (6 semanas) cada uno, repartiendo a partes iguales
+    los 7 meses (210 dias) hasta el peor caso (3 puntos)."""
     days = duration_to_days(waiting_time_to_start)
     return _score_lower_is_better(
-        days, [(7, 25), (14, 20), (30, 15), (60, 8), (math.inf, 3)], COMPONENT_MAX["inicio"]
+        days, [(42, 25), (84, 20), (126, 15), (168, 8), (math.inf, 3)], COMPONENT_MAX["inicio"]
     )
 
 
