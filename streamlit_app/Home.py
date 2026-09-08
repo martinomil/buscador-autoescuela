@@ -10,7 +10,7 @@ from app.db import get_session
 from app.gmail_reader import check_new_replies
 from app.llm.pipeline import process_unprocessed_replies
 from app.ranking_service import evaluate_all, sort_ranking_rows, build_ranking_rows
-from app.repository import count_by_status
+from app.repository import count_by_status, list_real_reply_messages
 
 st.set_page_config(page_title="Buscador autoescuela", page_icon="🚗", layout="wide")
 st_autorefresh(interval=60_000, key="home_autorefresh")
@@ -45,8 +45,30 @@ col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Total autoescuelas", total)
 col2.metric("Contactadas", contactadas)
 col3.metric("Pendientes de contactar", pendientes)
+
 col4.metric("Respuestas recibidas", respuestas)
+if col4.button("Ver respuestas", width="stretch", disabled=respuestas == 0):
+    st.session_state["detail_panel"] = None if st.session_state.get("detail_panel") == "respuestas" else "respuestas"
+
 col5.metric("Requieren seguimiento", seguimiento)
+if col5.button("Ver seguimiento", width="stretch", disabled=seguimiento == 0):
+    st.session_state["detail_panel"] = None if st.session_state.get("detail_panel") == "seguimiento" else "seguimiento"
+
+detail_panel = st.session_state.get("detail_panel")
+if detail_panel:
+    panel_title = "📬 Respuestas recibidas" if detail_panel == "respuestas" else "🔁 Requieren seguimiento"
+    panel_statuses = REPLIED_LIKE_STATUSES if detail_panel == "respuestas" else {"follow_up_needed"}
+
+    st.subheader(panel_title)
+    with get_session() as session:
+        messages = list_real_reply_messages(session, panel_statuses)
+        if not messages:
+            st.caption("No hay nada que mostrar.")
+        for m in messages:
+            st.markdown(f"**{m.autoescuela.name}**")
+            st.text(m.body_text or "(sin texto)")
+    if st.button("Cerrar", key="close_detail_panel"):
+        st.session_state["detail_panel"] = None
 
 st.divider()
 

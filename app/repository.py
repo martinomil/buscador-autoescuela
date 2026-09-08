@@ -36,6 +36,24 @@ def list_emails_for_autoescuela(session: Session, autoescuela_id: int) -> list[E
     return list(session.scalars(stmt).all())
 
 
+def list_real_reply_messages(session: Session, statuses: set[str] | None = None) -> list[EmailMessage]:
+    """Respuestas entrantes reales (no rebotes ni tests) asociadas a una
+    autoescuela, opcionalmente filtradas por el estado actual de esta."""
+    stmt = (
+        select(EmailMessage)
+        .join(Autoescuela, EmailMessage.autoescuela_id == Autoescuela.id)
+        .where(
+            EmailMessage.direction == "inbound",
+            EmailMessage.kind.is_(None),
+            EmailMessage.autoescuela_id.is_not(None),
+        )
+        .order_by(EmailMessage.created_at.desc())
+    )
+    if statuses:
+        stmt = stmt.where(Autoescuela.status.in_(statuses))
+    return list(session.scalars(stmt).all())
+
+
 def list_unmatched_inbound(session: Session) -> list[EmailMessage]:
     stmt = (
         select(EmailMessage)
