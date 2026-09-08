@@ -24,7 +24,7 @@ def _plain_message(msg_id, thread_id, sender, subject, body, internal_date="1700
         "payload": {
             "headers": [
                 {"name": "From", "value": sender},
-                {"name": "To", "value": "martinomilb@gmail.com"},
+                {"name": "To", "value": "usuario@ejemplo.com"},
                 {"name": "Subject", "value": subject},
             ],
             "mimeType": "text/plain",
@@ -41,7 +41,7 @@ def _html_message(msg_id, thread_id, sender, subject, html_body, internal_date="
         "payload": {
             "headers": [
                 {"name": "From", "value": sender},
-                {"name": "To", "value": "martinomilb@gmail.com"},
+                {"name": "To", "value": "usuario@ejemplo.com"},
                 {"name": "Subject", "value": subject},
             ],
             "mimeType": "text/html",
